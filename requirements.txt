@@ -1,0 +1,8 @@
+opencv-python
+numpy
+PyQt6
+PyQt6-Charts
+ultralytics
+pandas
+matplotlib
+seaborn
