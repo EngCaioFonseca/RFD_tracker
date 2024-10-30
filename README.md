@@ -1,4 +1,4 @@
-# Barbell Velocity Tracker
+# Rate of Force Development Tracker
 
 A Python application for real-time tracking and analysis of barbell movements using computer vision. This tool helps athletes and coaches analyze lifting performance by measuring velocity, force, and power metrics during exercises.
 
