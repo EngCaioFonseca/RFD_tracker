@@ -72,6 +72,7 @@ json
 1. Start the application:
 
 bash
+
 python RFD_tracker.py
 
 2. Calibrate the system:
@@ -128,10 +129,15 @@ python test_camera.py
 1. Ensure WSL2 is installed
 2. Enable camera access in Windows settings
 3. Configure `/etc/wsl.conf`:
+   
 ini
+
 [boot]
+
 systemd=true
+
 [wsl2]
+
 devices=true
 
 
