@@ -1,5 +1,5 @@
 """
-Advanced Barbell Velocity Tracker
+Rate of Force Development Tracker
 
 A Python application that uses YOLO object detection and computer vision to track 
 barbell movement and calculate advanced lifting metrics.
@@ -18,8 +18,8 @@ Requirements:
 - NumPy
 - torch
 
-Author: Your Name
-Date: YYYY-MM-DD
+Author: Caio Fonseca
+Date: 2024-10-30
 """
 
 import sys
@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
-
+from PyQt6.QtCore import QThread, pyqtSignal
 
 
 
@@ -869,7 +869,84 @@ class DatabaseManager:
         with sqlite3.connect(self.db_path) as conn:
             return pd.read_sql_query(query, conn, params=params)
 
-
+class VideoProcessingThread(QThread):
+    """Worker thread for video processing"""
+    progress = pyqtSignal(int)
+    frame_processed = pyqtSignal(object)
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    
+    def __init__(self, video_path, exercise_type, weight):
+        super().__init__()
+        self.video_path = video_path
+        self.exercise_type = exercise_type
+        self.weight = weight
+        self.model = YOLO('yolov8n.pt')
+    
+    def run(self):
+        try:
+            cap = cv2.VideoCapture(self.video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            processed_frames = 0
+            
+            # Data storage
+            positions = []
+            timestamps = []
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Detect barbell
+                results = self.model(frame)
+                
+                # Process detections
+                for result in results:
+                    for box, cls, conf in zip(result.boxes.xyxy, 
+                                            result.boxes.cls, 
+                                            result.boxes.conf):
+                        if cls == 1 and conf > 0.5:  # Assuming class 1 is barbell
+                            x1, y1, x2, y2 = box.tolist()
+                            center_x = (x1 + x2) / 2
+                            center_y = (y1 + y2) / 2
+                            
+                            # Store position
+                            positions.append((center_x, center_y))
+                            timestamps.append(processed_frames / cap.get(cv2.CAP_PROP_FPS))
+                            
+                            # Draw detection
+                            cv2.circle(frame, (int(center_x), int(center_y)), 
+                                     5, (0, 255, 0), -1)
+                
+                # Emit processed frame
+                self.frame_processed.emit(frame)
+                
+                # Update progress
+                processed_frames += 1
+                progress = int((processed_frames / total_frames) * 100)
+                self.progress.emit(progress)
+            
+            cap.release()
+            
+            # Calculate metrics
+            metrics = self.calculate_metrics(positions, timestamps)
+            self.finished.emit(metrics)
+            
+        except Exception as e:
+            self.error.emit(str(e))
+    
+    def calculate_metrics(self, positions, timestamps):
+        """Calculate performance metrics from positions and timestamps"""
+        # Implementation similar to live tracking metrics calculation
+        # Return dictionary of metrics
+        return {
+            'exercise_type': self.exercise_type,
+            'weight_kg': self.weight,
+            'timestamps': timestamps,
+            'positions': positions,
+            # Add other metrics
+        }
 
 class AdvancedGUI(QMainWindow):
     """Enhanced GUI with advanced features for barbell tracking"""
@@ -972,6 +1049,7 @@ class AdvancedGUI(QMainWindow):
         self.tabs.addTab(self.create_history_tab(), "Lift History")
         self.tabs.addTab(self.create_analysis_tab(), "Analysis")
         self.tabs.addTab(self.create_settings_tab(), "Settings")
+        self.tabs.addTab(self.create_video_processing_tab(), "Video Processing")
         
         # Create status bar
         self.statusBar().showMessage("Ready")
@@ -1591,3 +1669,131 @@ class AdvancedGUI(QMainWindow):
         except Exception as e:
             self.logger.error(f"Closure error: {str(e)}")
             event.accept()
+
+    def create_video_processing_tab(self):
+        """Create tab for video file processing"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+    
+        # File selection area
+        file_group = QGroupBox("Video File")
+        file_layout = QHBoxLayout()
+        
+        self.video_path_label = QLabel("No file selected")
+        select_file_btn = QPushButton("Select Video")
+        select_file_btn.clicked.connect(self.on_select_video)
+        
+        file_layout.addWidget(self.video_path_label)
+        file_layout.addWidget(select_file_btn)
+        file_group.setLayout(file_layout)
+    
+        # Processing controls
+        controls_group = QGroupBox("Processing Controls")
+        controls_layout = QVBoxLayout()
+    
+        # Exercise settings (reuse from tracking tab)
+        settings = QHBoxLayout()
+        settings.addWidget(QLabel("Exercise:"))
+        self.video_exercise_combo = QComboBox()
+        self.video_exercise_combo.addItems([
+        "Squat", "Bench Press", "Deadlift", "Clean", "Snatch"
+        ])
+        settings.addWidget(self.video_exercise_combo)
+    
+        settings.addWidget(QLabel("Weight (kg):"))
+        self.video_weight_spin = QDoubleSpinBox()
+        self.video_weight_spin.setRange(0, 500)
+        self.video_weight_spin.setValue(100)
+        settings.addWidget(self.video_weight_spin)
+    
+        # Progress bar
+        self.process_progress = QProgressBar()
+        
+        # Process button
+        self.process_btn = QPushButton("Process Video")
+        self.process_btn.clicked.connect(self.on_process_video)
+        self.process_btn.setEnabled(False)
+        
+        controls_layout.addLayout(settings)
+        controls_layout.addWidget(self.process_progress)
+        controls_layout.addWidget(self.process_btn)
+        controls_group.setLayout(controls_layout)
+        
+        # Video preview
+        preview_group = QGroupBox("Video Preview")
+        preview_layout = QVBoxLayout()
+        self.video_preview_label = QLabel()
+        self.video_preview_label.setMinimumSize(640, 480)
+        preview_layout.addWidget(self.video_preview_label)
+        preview_group.setLayout(preview_layout)
+        
+        # Add all components to main layout
+        layout.addWidget(file_group)
+        layout.addWidget(controls_group)
+        layout.addWidget(preview_group)
+        
+        return widget
+
+    def on_select_video(self):
+        """Handle video file selection"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Video File",
+            "",
+            "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*.*)"
+        )
+        
+        if file_path:
+            self.video_path = file_path
+            self.video_path_label.setText(file_path)
+            self.process_btn.setEnabled(True)
+            
+            # Show first frame as preview
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            if ret:
+                self.display_preview_frame(frame)
+            cap.release()
+
+    def display_preview_frame(self, frame):
+        """Display frame in preview label"""
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_frame.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, 
+                     QImage.Format.Format_RGB888)
+    
+    # Scale image to fit label while maintaining aspect ratio
+        scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+            self.video_preview_label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio
+        )
+        self.video_preview_label.setPixmap(scaled_pixmap)
+
+    def on_process_video(self):
+        """Process the selected video file"""
+        try:
+            self.process_btn.setEnabled(False)
+            self.statusBar().showMessage("Processing video...")
+            
+            # Create worker thread for processing
+            self.process_thread = VideoProcessingThread(
+            self.video_path,
+            self.video_exercise_combo.currentText(),
+            self.video_weight_spin.value()
+        )
+        
+            # Connect signals
+            self.process_thread.progress.connect(self.process_progress.setValue)
+            self.process_thread.frame_processed.connect(self.display_preview_frame)
+            self.process_thread.finished.connect(self.on_processing_complete)
+            self.process_thread.error.connect(self.on_processing_error)
+            
+            # Start processing
+            self.process_thread.start()
+        
+        except Exception as e:
+            self.statusBar().showMessage(f"Error: {str(e)}")
+            self.process_btn.setEnabled(True)
+
+    
